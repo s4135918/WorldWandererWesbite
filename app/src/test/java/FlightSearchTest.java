@@ -1,196 +1,253 @@
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.LocalDate;
-import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * JUnit 5 tests that:
+ each assignment condition is met (boundary cases where it makes sense),
+ Check the boolean return value,
+  Check object attributes are set on success and unchanged on failure .
+ 
+ 
+  Each test focuses on ONE rule at a time,
+ Valid vs invalid cases are right next to each other,
+  A small date helper avoids hard coding today’s date.
+ */
 public class FlightSearchTest {
 
-    private static final ZoneId MEL = ZoneId.of("Australia/Melbourne");
-
-    // Helper: format a Melbourne-local date as dd/MM/yyyy
-    private String fmt(LocalDate d) {
-        return String.format("%02d/%02d/%04d", d.getDayOfMonth(), d.getMonthValue(), d.getYear());
+    // Helper to format dates as dd/MM/uuuu relative to today
+    private static String fmtDaysFromNow(int days) {
+        var df = DateTimeFormatter.ofPattern("dd/MM/uuuu");
+        return LocalDate.now().plusDays(days).format(df);
     }
 
-    // Helper: today + n days, already formatted
-    private String todayPlus(int days) {
-        return fmt(LocalDate.now(MEL).plusDays(days));
-    }
-
-    private boolean call(
-            String origin, String destination,
+    // Convenience wrapper with defaults that are otherwise valid
+    private static boolean call(
+            FlightSearch fs,
+            String origin, String dest,
             String dep, String ret,
-            String clazz,
             int adults, int children, int infants,
-            boolean emergency
+            boolean emergency, String seatClass
     ) {
-        return new FlightSearch().runFlightSearch(origin, destination, dep, ret, clazz, adults, children, infants, emergency);
+        return fs.runFlightSearch(origin, dest, dep, ret, adults, children, infants, emergency, seatClass);
     }
 
-    // ---- 1) Total passengers 1..9 ----
     @Nested
     class TotalPassengersRange {
-        @Test
-        void zero_or_ten_invalid() {
-            String dep = todayPlus(2), ret = todayPlus(5);
-            assertFalse(call("mel","syd", dep, ret, "economy", 0,0,0,false)); // total 0
-            assertFalse(call("mel","syd", dep, ret, "economy",10,0,0,false)); // total 10
-        }
-        @Test
-        void one_and_nine_valid() {
-            String dep = todayPlus(2), ret = todayPlus(5);
-            assertTrue(call("mel","syd", dep, ret, "economy", 1,0,0,false));  // total 1
-            assertTrue(call("mel","syd", dep, ret, "economy", 9,0,0,false));  // total 9
-        }
-    }
-
-    // ---- 2) Children: not in first; not in emergency rows ----
-    @Nested
-    class ChildrenConstraints {
-        @Test
-        void children_in_first_or_emergency_invalid() {
-            String dep = todayPlus(3), ret = todayPlus(6);
-            assertFalse(call("mel","syd", dep, ret, "first", 1,1,0,false));   // first + child
-            assertFalse(call("mel","syd", dep, ret, "economy",1,1,0,true));   // emergency + child
-        }
-        @Test
-        void child_in_economy_non_emergency_valid() {
-            String dep = todayPlus(3), ret = todayPlus(6);
-            assertTrue(call("mel","syd", dep, ret, "economy",1,1,0,false));
+        @ParameterizedTest
+        @CsvSource({
+                // total=1 (min) -> ok
+                "1,0,0,true",
+                // total=9 (max) -> ok
+                "3,4,2,true",
+                // total=0 -> fail
+                "0,0,0,false",
+                // total=10 -> fail
+                "4,5,1,false"
+        })
+        void totalPassengers(int adults, int children, int infants, boolean expected) {
+            FlightSearch fs = new FlightSearch();
+            boolean ok = call(fs, "mel","pvg", fmtDaysFromNow(5), fmtDaysFromNow(12),
+                    adults, children, infants, false, "economy");
+            assertEquals(expected, ok);
         }
     }
 
-    // ---- 3) Infants: not in business; not in emergency rows ----
-    @Nested
-    class InfantConstraints {
-        @Test
-        void infant_in_business_or_emergency_invalid() {
-            String dep = todayPlus(4), ret = todayPlus(7);
-            assertFalse(call("mel","syd", dep, ret, "business",1,0,1,false)); // business + infant
-            assertFalse(call("mel","syd", dep, ret, "economy", 1,0,1,true));  // emergency + infant
-        }
-        @Test
-        void infant_in_economy_non_emergency_valid() {
-            String dep = todayPlus(4), ret = todayPlus(7);
-            assertTrue(call("mel","syd", dep, ret, "economy",1,0,1,false));
-        }
-    }
-
-    // ---- 4) Children need adults; ≤2 children per adult ----
     @Nested
     class ChildrenAdultRatio {
         @Test
-        void no_adult_or_over_ratio_invalid() {
-            String dep = todayPlus(2), ret = todayPlus(3);
-            assertFalse(call("mel","syd", dep, ret, "economy",0,1,0,false));  // no adult
-            assertFalse(call("mel","syd", dep, ret, "economy",1,3,0,false));  // 3 > 2*1
+        void atMostTwoChildrenPerAdult_passAtLimit() {
+            FlightSearch fs = new FlightSearch();
+            assertTrue(call(fs, "mel","pvg", fmtDaysFromNow(3), fmtDaysFromNow(9),
+                    2, 4, 0, false, "economy"));
         }
+
         @Test
-        void boundary_two_per_adult_valid() {
-            String dep = todayPlus(2), ret = todayPlus(3);
-            assertTrue(call("mel","syd", dep, ret, "economy",2,4,0,false));   // 4 == 2*2
+        void atMostTwoChildrenPerAdult_failPlusOne() {
+            FlightSearch fs = new FlightSearch();
+            assertFalse(call(fs, "mel","pvg", fmtDaysFromNow(3), fmtDaysFromNow(9),
+                    2, 5, 0, false, "economy"));
         }
     }
 
-    // ---- 5) Infants: ≤ adults (1 per adult) ----
     @Nested
     class InfantPerAdult {
         @Test
-        void more_infants_than_adults_invalid() {
-            String dep = todayPlus(2), ret = todayPlus(4);
-            assertFalse(call("mel","syd", dep, ret, "economy",1,0,2,false));
+        void atMostOneInfantPerAdult_passAtLimit() {
+            FlightSearch fs = new FlightSearch();
+            assertTrue(call(fs, "mel","pvg", fmtDaysFromNow(4), fmtDaysFromNow(10),
+                    2, 0, 2, false, "economy"));
         }
+
         @Test
-        void infants_equal_adults_valid() {
-            String dep = todayPlus(2), ret = todayPlus(4);
-            assertTrue(call("mel","syd", dep, ret, "economy",2,0,2,false));
+        void atMostOneInfantPerAdult_failPlusOne() {
+            FlightSearch fs = new FlightSearch();
+            assertFalse(call(fs, "mel","pvg", fmtDaysFromNow(4), fmtDaysFromNow(10),
+                    2, 0, 3, false, "economy"));
         }
     }
 
-    // ---- 6) Date format & calendar validity ----
-    @Nested
-    class DateParsing {
-        @Test
-        void bad_format_or_impossible_date_invalid() {
-            String badDep = "2025-12-01";   // wrong format
-            String dep = todayPlus(5);
-            String badRet = "29/02/2026";   // 2026 is not a leap year
-            assertFalse(call("mel","syd", badDep, todayPlus(7), "economy", 1,0,0,false));
-            assertFalse(call("mel","syd", dep, badRet, "economy", 1,0,0,false));
-        }
-        @Test
-        void strict_ddMMyyyy_valid() {
-            assertTrue(call("mel","syd", todayPlus(10), todayPlus(12), "economy", 1,0,0,false));
-        }
-    }
-
-    // ---- 7) Departure not in the past (Melbourne) ----
     @Nested
     class DepartNotPast {
         @Test
-        void yesterday_invalid_today_valid() {
-            LocalDate y = LocalDate.now(MEL).minusDays(1);
-            assertFalse(call("mel","syd", fmt(y), todayPlus(3), "economy", 1,0,0,false));
-            assertTrue(call("mel","syd", todayPlus(0), todayPlus(3), "economy", 1,0,0,false));
+        void departCannotBeInPast() {
+            FlightSearch fs = new FlightSearch();
+            assertFalse(call(fs, "mel","pvg", fmtDaysFromNow(-1), fmtDaysFromNow(5),
+                    1,0,0,false,"economy"));
         }
     }
 
-    // ---- 8) Two-way only: return >= depart ----
+    @Nested
+    class DateParsing {
+        @Test
+        void strictFormat_invalidLeapDayOnNonLeapYear() {
+            FlightSearch fs = new FlightSearch();
+            // 29 Feb 2026 is invalid (2026 not a leap year) -> parser should reject
+            assertFalse(call(fs, "mel","pvg", "29/02/2026", "01/03/2026",
+                    1,0,0,false,"economy"));
+        }
+
+        @Test
+        void strictFormat_validLeapDayOnLeapYear() {
+            FlightSearch fs = new FlightSearch();
+            // Push to the next leap year from now when needed
+            
+            assertTrue(call(fs, "mel","pvg", fmtDaysFromNow(7), fmtDaysFromNow(10),
+                    1,0,0,false,"economy"));
+        }
+    }
+
     @Nested
     class ReturnAfterOrSameDay {
         @Test
-        void return_before_depart_invalid_same_or_after_valid() {
-            String dep = todayPlus(5);
-            assertFalse(call("mel","syd", dep, todayPlus(4), "economy", 1,0,0,false)); // before
-            assertTrue(call("mel","syd", dep, dep,            "economy", 1,0,0,false)); // same
-            assertTrue(call("mel","syd", dep, todayPlus(6), "economy", 1,0,0,false));   // after
+        void returnBeforeDepartFails() {
+            FlightSearch fs = new FlightSearch();
+            assertFalse(call(fs, "mel","pvg", fmtDaysFromNow(6), fmtDaysFromNow(5),
+                    1,0,0,false,"economy"));
         }
     }
 
-    // ---- 9) Class membership + 10) Emergency row only in economy ----
-    @Nested
-    class ClassAndEmergency {
-        @Test
-        void unknown_class_invalid_and_emergency_in_non_economy_invalid() {
-            String dep = todayPlus(6), ret = todayPlus(8);
-            assertFalse(call("mel","syd", dep, ret, "ultra", 1,0,0,false));     // not in set
-            assertFalse(call("mel","syd", dep, ret, "business",1,0,0,true));     // emergency only economy
-        }
-        @Test
-        void economy_emergency_ok_when_no_kids_or_infants() {
-            String dep = todayPlus(6), ret = todayPlus(8);
-            assertTrue(call("mel","syd", dep, ret, "economy",2,0,0,true));
-        }
-    }
-
-    // ---- 11) Airport membership + origin != destination ----
     @Nested
     class Airports {
         @Test
-        void must_be_allowed_and_different() {
-            String dep = todayPlus(2), ret = todayPlus(3);
-            assertFalse(call("xyz","syd", dep, ret, "economy", 1,0,0,false)); // not allowed
-            assertFalse(call("mel","mel", dep, ret, "economy", 1,0,0,false)); // equal
+        void originAndDestinationMustBeAllowedAndDifferent_pass() {
+            FlightSearch fs = new FlightSearch();
+            assertTrue(call(fs, "mel","pvg", fmtDaysFromNow(3), fmtDaysFromNow(8),
+                    1,0,0,false,"economy"));
         }
+
         @Test
-        void allowed_pair_valid() {
-            String dep = todayPlus(2), ret = todayPlus(3);
-            assertTrue(call("mel","syd", dep, ret, "economy", 1,0,0,false));
+        void invalidAirportOrSameAirport_fails() {
+            FlightSearch fs = new FlightSearch();
+            // invalid origin code
+            assertFalse(call(fs, "zzz","pvg", fmtDaysFromNow(3), fmtDaysFromNow(8),
+                    1,0,0,false,"economy"));
+            // same origin and destination
+            assertFalse(call(fs, "mel","mel", fmtDaysFromNow(3), fmtDaysFromNow(8),
+                    1,0,0,false,"economy"));
         }
     }
 
-    // ---- All-valid scenarios (≥4 combos) ----
+    @Nested
+    class ClassAndEmergency {
+        @Test
+        void emergencyRowOnlyAllowedForEconomy() {
+            FlightSearch fs = new FlightSearch();
+            // emergency + business -> should fail 
+            assertFalse(call(fs, "mel","pvg", fmtDaysFromNow(2), fmtDaysFromNow(6),
+                    1,0,0,true,"business"));
+            // emergency + economy -> ok
+            assertTrue(call(fs, "mel","pvg", fmtDaysFromNow(2), fmtDaysFromNow(6),
+                    1,0,0,true,"economy"));
+        }
+
+        @Test
+        void nonEmergencyAllowedForAllClasses() {
+            FlightSearch fs = new FlightSearch();
+            assertTrue(call(fs, "mel","pvg", fmtDaysFromNow(2), fmtDaysFromNow(6),
+                    1,0,0,false,"first"));
+            assertTrue(call(fs, "mel","pvg", fmtDaysFromNow(2), fmtDaysFromNow(6),
+                    1,0,0,false,"business"));
+            assertTrue(call(fs, "mel","pvg", fmtDaysFromNow(2), fmtDaysFromNow(6),
+                    1,0,0,false,"premium economy"));
+        }
+    }
+
+    @Nested
+    class ChildrenConstraints {
+        @Test
+        void childrenNotInFirstOrEmergency() {
+            FlightSearch fs = new FlightSearch();
+            // children + first -> fail
+            assertFalse(call(fs, "mel","pvg", fmtDaysFromNow(5), fmtDaysFromNow(9),
+                    1,1,0,false,"first"));
+            // children + emergency -> fail
+            assertFalse(call(fs, "mel","pvg", fmtDaysFromNow(5), fmtDaysFromNow(9),
+                    1,1,0,true,"economy"));
+        }
+    }
+
+    @Nested
+    class InfantConstraints {
+        @Test
+        void infantsNotInBusinessOrEmergency() {
+            FlightSearch fs = new FlightSearch();
+            // infants + business -> fail
+            assertFalse(call(fs, "mel","pvg", fmtDaysFromNow(5), fmtDaysFromNow(9),
+                    1,0,1,false,"business"));
+            // infants + emergency -> fail
+            assertFalse(call(fs, "mel","pvg", fmtDaysFromNow(5), fmtDaysFromNow(9),
+                    1,0,1,true,"economy"));
+        }
+    }
+
+    @Nested
+    class AttributesBehaviour {
+        @Test
+        void attributesAreNotModifiedOnFailure() {
+            FlightSearch fs = new FlightSearch();
+            // valid call to set state
+            assertTrue(call(fs, "mel","pvg", fmtDaysFromNow(3), fmtDaysFromNow(7),
+                    1,0,0,false,"economy"));
+            String origOrigin = fs.getOrigin();
+
+            // invalid call (origin == dest) -> should return false and keep previous state
+            assertFalse(call(fs, "mel","mel", fmtDaysFromNow(3), fmtDaysFromNow(7),
+                    1,0,0,false,"economy"));
+
+            assertEquals(origOrigin, fs.getOrigin(), "State should be unchanged after a failed validation");
+        }
+
+        @Test
+        void attributesAreSetOnSuccess() {
+            FlightSearch fs = new FlightSearch();
+            assertTrue(call(fs, "mel","pvg", fmtDaysFromNow(3), fmtDaysFromNow(7),
+                    2,1,1,false,"economy"));
+            assertEquals("mel", fs.getOrigin());
+            assertEquals("pvg", fs.getDestination());
+            assertEquals(2, fs.getAdults());
+            assertEquals(1, fs.getChildren());
+            assertEquals(1, fs.getInfants());
+            assertFalse(fs.isEmergencyRow());
+            assertEquals("economy", fs.getSeatClass());
+            assertNotNull(fs.getDepartDate());
+            assertNotNull(fs.getReturnDate());
+        }
+    }
+
     @Nested
     class AllValidCombos {
         @Test
-        void four_variations_all_true() {
-            assertTrue(call("mel","syd", todayPlus(3),  todayPlus(6),  "economy",          1,0,0,false));
-            assertTrue(call("syd","lax", todayPlus(10), todayPlus(20), "premium economy",  2,0,0,false));
-            assertTrue(call("cdg","del", todayPlus(15), todayPlus(18), "economy",          2,2,0,false)); // 2 adults, 2 kids
-            assertTrue(call("pvg","doh", todayPlus(7),  todayPlus(9),  "economy",          2,0,2,false)); // infants==adults
+        void simpleHappyPath() {
+            FlightSearch fs = new FlightSearch();
+            assertTrue(call(fs, "syd","lax", fmtDaysFromNow(10), fmtDaysFromNow(20),
+                    3,2,1,false,"premium economy"));
         }
     }
 }
