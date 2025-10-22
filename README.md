@@ -12,7 +12,7 @@ If any rule fails, it returns **false** and does **not** change state.
 ## How to run tests
 ```bash
 # Windows
-gradlew test
+./gradlew test
 
 # macOS/Linux
 ./gradlew test
